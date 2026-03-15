@@ -1,0 +1,959 @@
+name: Build Chromium from Source
+
+on:
+  push:
+    tags:
+      - 'chromium-*'
+  schedulae:
+    - cron: '0 0 * * *'  # Run daily at midnight UTC
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
+      version:
+        description: 'Chromium version (e.g., 126.0.6478.126)'
+        required: false
+        type: string
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      should_build: ${{ steps.get_version.outputs.should_build }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Get latest Chromium version
+        id: get_version
+        run: |
+          # Fetch latest Chromium version from version server
+          VERSION=$(curl -sS https://versionhistory.googleapis.com/v1/chrome/all/versions | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+versions = data.get('versions', [])
+if versions:
+    # Get the latest stable version
+    for v in versions:
+        if v.get('channel') == 'stable':
+            print(v.get('version', ''))
+            break
+          ")
+          
+          if [ -z "$VERSION" ]; then
+            echo "Failed to fetch version, using default"
+            exit 1
+          fi
+          
+          echo "Latest Chromium version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+          # Read last built version from file if exists
+          LAST_VERSION_FILE="$HOME/last_chromium_version"
+          if [ -f "$LAST_VERSION_FILE" ]; then
+            LAST_VERSION=$(cat "$LAST_VERSION_FILE")
+          else
+            LAST_VERSION=""
+          fi
+          
+          # Check if we should build (version changed or manual trigger)
+          MANUAL_VERSION="${{ github.event.inputs.version }}"
+          if [ -n "$MANUAL_VERSION" ]; then
+            echo "Manual build requested for version: $MANUAL_VERSION"
+            echo "version=$MANUAL_VERSION" >> $GITHUB_OUTPUT
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          elif [ "$VERSION" != "$LAST_VERSION" ]; then
+            echo "New version available. Last: $LAST_VERSION, Latest: $VERSION"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          else
+            echo "No new version available. Current: $LAST_VERSION, Latest: $VERSION"
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Save last version
+        run: |
+          echo "${{ steps.get_version.outputs.version }}" > $HOME/last_chromium_version
+      
+      - name: Create tag if new version
+        if: steps.get_version.outputs.should_build == 'true'
+        run: |
+          BUILD_VERSION="${{ steps.get_version.outputs.version }}"
+          
+          # Create a new tag for this version
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          
+          # Check if tag already exists
+          if git rev-parse "refs/tags/chromium-$BUILD_VERSION" >/dev/null 2>&1; then
+            echo "Tag chromium-$BUILD_VERSION already exists"
+          else
+            git tag "chromium-$BUILD_VERSION"
+            git push origin "chromium-$BUILD_VERSION"
+            echo "Created and pushed tag: chromium-$BUILD_VERSION"
+          fi
+
+  build-windows:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 600
+    
+    permissions:
+      contents: write
+    
+    env:
+      CHROMIUM_VERSION: ${{ needs.check-version.outputs.version }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Get GitHub token for authentication
+        run: |
+          git config --global credential.helper store
+          "https://$env:GITHUB_TOKEN@github.com" | Out-File -FilePath ~/.git-credentials -Encoding utf8
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Install Visual Studio Build Tools
+        uses: egor-tensin/setup-vs-build-tools@v2
+        with:
+          vs-version: '2022'
+          components: 'Microsoft.VisualStudio.Workload.VCTools,Microsoft.VisualStudio.Component.VC.Tools.x86.x64,Microsoft.VisualStudio.Component.Windows11SDK.22621'
+      
+      - name: Install depot_tools
+        run: |
+          $depotToolsPath = "C:\depot_tools"
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git $depotToolsPath
+          Add-Content $env:Path ";$depotToolsPath"
+          [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$depotToolsPath", [EnvironmentVariableTarget]::User)
+      
+      - name: Set environment variables
+        run: |
+          $depotToolsPath = "C:\depot_tools"
+          Add-Content $env:GITHUB_ENV "PATH=$env:Path;$depotToolsPath"
+          Add-Content $env:GITHUB_ENV "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
+          Add-Content $env:GITHUB_ENV "GYP_MSVS_VERSION=2022"
+      
+      - name: Fetch Chromium source
+        run: |
+          $env:Path = "$env:Path;C:\depot_tools"
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+          $env:GYP_MSVS_VERSION = "2022"
+          
+          cd $env:USERPROFILE
+          if (-not (Test-Path "chromium")) {
+            mkdir chromium
+          }
+          cd chromium
+          
+          # Initialize depot_tools
+          cmd /c "fetch --nohooks --no-history chromium"
+      
+      - name: Clone Trivalent patches
+        run: |
+          cd $env:USERPROFILE\chromium
+          git clone https://github.com/secureblue/Trivalent.git trivalent-patches
+      
+      - name: Apply Trivalent patches
+        run: |
+          cd $env:USERPROFILE\chromium\src
+          
+          # Apply Vanadium patches
+          Get-ChildItem -Path "$env:USERPROFILE\chromium\trivalent-patches\vanadium_patches" -Filter "*.patch" | ForEach-Object {
+            Write-Host "Applying $($_.Name)..."
+            git apply "$($_.FullName)" --ignore-whitespace 2>$null
+          }
+          
+          # Apply Trivalent patches
+          Get-ChildItem -Path "$env:USERPROFILE\chromium\trivalent-patches\patches" -Filter "*.patch" | ForEach-Object {
+            Write-Host "Applying $($_.Name)..."
+            git apply "$($_.FullName)" --ignore-whitespace 2>$null
+          }
+      
+      - name: Run gclient hooks
+        run: |
+          $env:Path = "$env:Path;C:\depot_tools"
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+          
+          cd $env:USERPROFILE\chromium\src
+          cmd /c "gclient runhooks"
+      
+      - name: Generate build files
+        run: |
+          $env:Path = "$env:Path;C:\depot_tools"
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+          
+          cd $env:USERPROFILE\chromium\src
+          
+          # Generate release build
+          cmd /c "gn gen out\Release --args=\"is_official_build = true enable_nacl = false treat_warnings_as_errors = false chrome_pgo_phase = 0\""
+      
+      - name: Build Chromium
+        run: |
+          $env:Path = "$env:Path;C:\depot_tools"
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+          
+          cd $env:USERPROFILE\chromium\src
+          
+          # Build using ninja
+          cmd /c "ninja -C out\Release chrome -j 8"
+      
+      - name: Package build artifacts
+        run: |
+          $srcDir = "$env:USERPROFILE\chromium\src\out\Release"
+          $destDir = "$env:TEMP\chromium-build"
+          
+          New-Item -ItemType Directory -Force -Path $destDir
+          
+          # Copy Chrome executable and required files
+          Copy-Item "$srcDir\chrome.exe" $destDir -Force
+          Copy-Item "$srcDir\chrome.dll" $destDir -Force -ErrorAction SilentlyContinue
+          Copy-Item "$srcDir\*.dll" $destDir -Force -ErrorAction SilentlyContinue
+          
+          # Copy resources folder
+          Copy-Item "$srcDir\resources" $destDir -Recurse -Force -ErrorAction SilentlyContinue
+          
+          # Copy locales folder
+          Copy-Item "$srcDir\locales" $destDir -Recurse -Force -ErrorAction SilentlyContinue
+          
+          # Create updateurl.txt for chrlauncher (Cromite/Bromite compatible format)
+          $timestamp = [int64](Get-Date -UFormat "%s")
+          $updateUrl = "browser=chromium;os=windows;architecture=64-bit;timestamp=$timestamp;editor=${{ github.repository_owner }};channel=stable;repository=${{ github.server_url }}/${{ github.repository }}/releases;download=${{ github.server_url }}/${{ github.repository }}/releases/latest/download/chromium-windows.zip;version=${{ env.CHROMIUM_VERSION }};revision=1;commit=${{ github.sha }}"
+          $updateUrl | Out-File -FilePath "$destDir\updateurl.txt" -Encoding utf8
+          
+          # Create chrlauncher.ini template
+          @"
+[chrlauncher]
+
+# Custom Chromium update URL
+ChromiumUpdateUrl=${{ github.server_url }}/${{ github.repository }}/releases/latest/download/updateurl.txt
+
+# Command line for Chromium
+ChromiumCommandLine=--user-data-dir="%LOCALAPPDATA%\Trivalent\User Data" --no-default-browser-check
+
+# Chromium executable file name
+ChromiumBinary=chrome.exe
+
+# Chromium binaries directory
+ChromiumDirectory=.
+"@ | Out-File -FilePath "$destDir\chrlauncher.ini" -Encoding utf8
+          
+          # Create zip archive
+          Compress-Archive -Path $destDir\* -DestinationPath "$env:TEMP\chromium-windows.zip" -Force
+      
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            ${{ env.TEMP }}\chromium-windows.zip
+          body: |
+            Chromium built from source (Windows) - ${{ env.CHROMIUM_VERSION }}
+            
+            Build Type: ${{ github.event.inputs.build_type || 'Release' }}
+            Commit: ${{ github.sha }}
+            Built on: ${{ runner.os }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromium-windows
+          path: ${{ env.TEMP }}\chromium-windows.zip
+          retention-days: 5
+  
+  build-linux-deb:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 600
+    container:
+      image: ubuntu:jammy
+    
+    permissions:
+      contents: write
+    
+    env:
+      CHROMIUM_VERSION: ${{ needs.check-version.outputs.version }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            build-essential \
+            git \
+            python3 \
+            python3-pip \
+            wget \
+            curl \
+            unzip \
+            tar \
+            gnupg \
+            ca-certificates \
+            fakeroot \
+            pkg-config \
+            libbz2-dev \
+            libffi-dev \
+            libglib2.0-dev \
+            libnss3 \
+            libnspr4 \
+            libdbus-1-dev \
+            libatk1.0-dev \
+            libatk-bridge2.0-dev \
+            libcups2-dev \
+            libdrm2-dev \
+            libxkbcommon-dev \
+            libxcomposite-dev \
+            libxdamage-dev \
+            libxfixes-dev \
+            libxrandr-dev \
+            libgbm1-dev \
+            libpango1.0-dev \
+            libcairo2-dev \
+            libasound2-dev \
+            libpulse-dev \
+            libblkid-dev \
+            liblzma-dev \
+            libstdc++-12-dev \
+            clang \
+            lld \
+            bison \
+            flex \
+            gperf \
+            ninja-build \
+            cmake \
+            dpkg-dev
+      
+      - name: Install depot_tools
+        run: |
+          cd /opt
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo 'export PATH="/opt/depot_tools:$PATH"' >> ~/.bashrc
+          echo 'export PATH="/opt/depot_tools:$PATH"' >> $GITHUB_ENV
+      
+      - name: Create workspace directory
+        run: |
+          mkdir -p /root/chromium
+      
+      - name: Fetch Chromium source
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd /root/chromium
+          
+          git config --global credential.helper store
+          git config --global init.defaultBranch main
+          
+          fetch --nohooks --no-history chromium --target_os=linux --target_arch=x64
+      
+      - name: Clone Trivalent patches for DEB
+        run: |
+          cd /root/chromium
+          git clone https://github.com/secureblue/Trivalent.git trivalent-patches
+      
+      - name: Apply Trivalent patches for DEB
+        run: |
+          cd /root/chromium/src
+          
+          # Apply Vanadium patches first
+          for patch in /root/chromium/trivalent-patches/vanadium_patches/*.patch; do
+            echo "Applying $(basename $patch)..."
+            git apply "$patch" --ignore-whitespace || true
+          done
+          
+          # Apply Trivalent patches
+          for patch in /root/chromium/trivalent-patches/patches/*.patch; do
+            echo "Applying $(basename $patch)..."
+            git apply "$patch" --ignore-whitespace || true
+          done
+      
+      - name: Setup build environment
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd /root/chromium/src
+          
+          gclient runhooks
+          
+          gn gen out/Release \
+            --args='
+              is_official_build = true
+              is_component_build = false
+              enable_nacl = false
+              use_gold = false
+              use_lld = true
+              treat_warnings_as_errors = false
+              chrome_pgo_phase = 0
+              use_thin_lto = false
+            '
+      
+      - name: Build Chromium for DEB
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd /root/chromium/src
+          
+          ninja -C out/Release chrome -j $(nproc)
+      
+      - name: Create DEB package
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd /root/chromium/src
+          
+          # Build installer for DEB
+          ninja -C out/Release chrome/installer/linux/deb/build.sh
+          
+          # Create distribution directory
+          mkdir -p /root/chromium-build
+          cp out/Release/chrome /root/chromium-build/
+          cp -r out/Release/locales /root/chromium-build/
+          cp -r out/Release/resources /root/chromium-build/ 2>/dev/null || true
+          cp out/Release/lib*.so* /root/chromium-build/ 2>/dev/null || true
+          
+          # Create DEB package structure
+          mkdir -p /root/chromium-deb/DEBIAN
+          mkdir -p /root/chromium-deb/opt/chromium
+          
+          cp -r /root/chromium-build/* /root/chromium-deb/opt/chromium/
+          
+          cat > /root/chromium-deb/DEBIAN/control << 'EOF'
+Package: chromium
+Version: ${{ env.CHROMIUM_VERSION }}
+Section: web browsers
+Priority: optional
+Architecture: amd64
+Depends: libnss3, libatk1.0-0, libatk-bridge2.0-0, libcups2, libdrm2, libxkbcommon0, libxcomposite1, libxdamage1, libxfixes3, libxrandr2, libgbm1, libpango-1.0-0, libcairo2, libasound2
+Maintainer: Chromium Team <chromium@example.com>
+Description: Chromium web browser
+EOF
+          
+          cat > /root/chromium-deb/DEBIAN/postinst << 'EOF'
+#!/bin/sh
+chmod 4755 /opt/chromium/chrome
+EOF
+          
+          chmod 755 /root/chromium-deb/DEBIAN/postinst
+          
+          dpkg-deb --build /root/chromium-deb /root/chromium-${{ env.CHROMIUM_VERSION }}-amd64.deb
+      
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            /root/chromium-${{ env.CHROMIUM_VERSION }}-amd64.deb
+          body: |
+            Chromium built from source (Linux DEB) - ${{ env.CHROMIUM_VERSION }}
+            
+            Build Type: ${{ github.event.inputs.build_type || 'Release' }}
+            Commit: ${{ github.sha }}
+            Built on: ${{ runner.os }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromium-deb
+          path: /root/chromium-${{ env.CHROMIUM_VERSION }}-amd64.deb
+          retention-days: 5
+  
+  build-linux-rpm:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 600
+    container:
+      image: ubuntu:jammy
+    
+    permissions:
+      contents: write
+    
+    env:
+      CHROMIUM_VERSION: ${{ needs.check-version.outputs.version }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            build-essential \
+            git \
+            python3 \
+            python3-pip \
+            wget \
+            curl \
+            unzip \
+            tar \
+            gnupg \
+            ca-certificates \
+            rpm \
+            pkg-config \
+            libbz2-dev \
+            libffi-dev \
+            libglib2.0-dev \
+            libnss3 \
+            libnspr4 \
+            libdbus-1-dev \
+            libatk1.0-dev \
+            libatk-bridge2.0-dev \
+            libcups2-dev \
+            libdrm2-dev \
+            libxkbcommon-dev \
+            libxcomposite-dev \
+            libxdamage-dev \
+            libxfixes-dev \
+            libxrandr-dev \
+            libgbm1-dev \
+            libpango1.0-dev \
+            libcairo2-dev \
+            libasound2-dev \
+            libpulse-dev \
+            libblkid-dev \
+            liblzma-dev \
+            libstdc++-12-dev \
+            clang \
+            lld \
+            bison \
+            flex \
+            gperf \
+            ninja-build \
+            cmake
+      
+      - name: Install depot_tools
+        run: |
+          cd /opt
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo 'export PATH="/opt/depot_tools:$PATH"' >> ~/.bashrc
+          echo 'export PATH="/opt/depot_tools:$PATH"' >> $GITHUB_ENV
+      
+      - name: Create workspace directory
+        run: |
+          mkdir -p /root/chromium
+      
+      - name: Fetch Chromium source
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd /root/chromium
+          
+          git config --global credential.helper store
+          git config --global init.defaultBranch main
+          
+          fetch --nohooks --no-history chromium --target_os=linux --target_arch=x64
+      
+      - name: Clone Trivalent patches for RPM
+        run: |
+          cd /root/chromium
+          git clone https://github.com/secureblue/Trivalent.git trivalent-patches-rpm
+      
+      - name: Apply Trivalent patches for RPM
+        run: |
+          cd /root/chromium/src
+          
+          # Apply Vanadium patches first
+          for patch in /root/chromium/trivalent-patches-rpm/vanadium_patches/*.patch; do
+            echo "Applying $(basename $patch)..."
+            git apply "$patch" --ignore-whitespace || true
+          done
+          
+          # Apply Trivalent patches
+          for patch in /root/chromium/trivalent-patches-rpm/patches/*.patch; do
+            echo "Applying $(basename $patch)..."
+            git apply "$patch" --ignore-whitespace || true
+          done
+      
+      - name: Setup build environment
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd /root/chromium/src
+          
+          gclient runhooks
+          
+          gn gen out/Release \
+            --args='
+              is_official_build = true
+              is_component_build = false
+              enable_nacl = false
+              use_gold = false
+              use_lld = true
+              treat_warnings_as_errors = false
+              chrome_pgo_phase = 0
+              use_thin_lto = false
+            '
+      
+      - name: Build Chromium
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd /root/chromium/src
+          
+          ninja -C out/Release chrome -j $(nproc)
+      
+      - name: Create RPM package
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd /root/chromium/src
+          
+          # Create distribution directory
+          mkdir -p /root/chromium-build
+          cp out/Release/chrome /root/chromium-build/
+          cp -r out/Release/locales /root/chromium-build/
+          cp -r out/Release/resources /root/chromium-build/ 2>/dev/null || true
+          cp out/Release/lib*.so* /root/chromium-build/ 2>/dev/null || true
+          
+          # Create RPM package structure
+          mkdir -p /root/chromium-rpmBUILD/opt/chromium
+          mkdir -p /root/chromium-rpmBUILD/BUILDROOT
+          
+          cp -r /root/chromium-build/* /root/chromium-rpmBUILD/opt/chromium/
+          
+          # Create SPEC file
+          cat > /root/chromium.spec << 'EOF'
+Name: chromium
+Version: ${{ env.CHROMIUM_VERSION }}
+Release: 1%{?dist}
+Summary: Chromium web browser
+License: BSD
+URL: https://www.chromium.org
+
+%description
+Chromium web browser
+
+%files
+/opt/chromium/
+
+%post
+chmod 4755 /opt/chromium/chrome
+EOF
+          
+          # Build RPM
+          rpmbuild -bb /root/chromium.spec \
+            --define "_topdir /root/chromium-rpmBUILD" \
+            --define "_builddir /root/chromium-rpmBUILD" \
+            --define "_rpmdir /root/chromium-rpmBUILD" \
+            --define "_specdir /root" \
+            --define "_srcrpmdir /root/chromium-rpmBUILD"
+          
+          # Find and copy the built RPM
+          find /root/chromium-rpmBUILD -name "*.rpm" -exec cp {} /root/ \;
+      
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            /root/chromium-*.rpm
+          body: |
+            Chromium built from source (Linux RPM) - ${{ env.CHROMIUM_VERSION }}
+            
+            Build Type: ${{ github.event.inputs.build_type || 'Release' }}
+            Commit: ${{ github.sha }}
+            Built on: ${{ runner.os }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromium-rpm
+          path: /root/chromium-*.rpm
+          retention-days: 5
+
+  publish-repos:
+    needs: [check-version, build-linux-deb, build-linux-rpm]
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+    
+    env:
+      CHROMIUM_VERSION: ${{ needs.check-version.outputs.version }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Download DEB package
+        uses: actions/download-artifact@v4
+        with:
+          name: chromium-deb
+          path: deb
+      
+      - name: Download RPM package
+        uses: actions/download-artifact@v4
+        with:
+          name: chromium-rpm
+          path: rpm
+      
+      - name: Install required tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev rpm createrepo
+      
+      - name: Create DEB repository
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/repos/deb
+          
+          # Copy DEB packages
+          cp deb/*.deb $GITHUB_WORKSPACE/repos/deb/
+          
+          # Create Packages.gz
+          cd $GITHUB_WORKSPACE/repos/deb
+          dpkg-scanpackages . > Packages
+          gzip -k -f Packages
+          
+          # Create Release file
+          cat > Release << EOF
+Origin: Trivalent
+Label: Trivalent
+Suite: stable
+Version: ${{ env.CHROMIUM_VERSION }}
+Codename: stable
+Architectures: amd64
+Components: main
+Description: Trivalent - Security-focused Chromium fork
+EOF
+          
+          # Sign the Release file (optional, can skip for unsigned)
+          chmod 644 Release Packages.gz
+      
+      - name: Create RPM repository
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/repos/rpm
+          
+          # Copy RPM packages
+          cp rpm/*.rpm $GITHUB_WORKSPACE/repos/rpm/
+          
+          # Create RPM repository metadata
+          cd $GITHUB_WORKSPACE/repos/rpm
+          createrepo .
+      
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v5
+        with:
+          static_site_generator: none
+      
+      - name: Deploy to GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: $GITHUB_WORKSPACE/repos
+      
+      - name: Create repository configuration files
+        run: |
+          # Create DEB source config
+          cat > $GITHUB_WORKSPACE/repos/deb-install.sh << 'EOF'
+#!/bin/bash
+# Trivalent DEB Repository Setup
+# Add this repository to your system:
+
+# For Debian/Ubuntu:
+echo "deb [trusted=yes] https://$(git remote get-url origin | sed 's|github.com/||' | sed 's|.git||')/deb/ ./" | sudo tee /etc/apt/sources.list.d/trivalent.list
+sudo apt-get update
+sudo apt-get install chromium
+EOF
+          
+          # Create RPM source config
+          cat > $GITHUB_WORKSPACE/repos/rpm-install.sh << 'EOF'
+#!/bin/bash
+# Trivalent RPM Repository Setup
+# Add this repository to your system:
+
+# For Fedora/RHEL:
+sudo tee /etc/yum.repos.d/trivalent.repo << REPO
+[trivalent]
+name=Trivalent
+baseurl=https://$(git remote get-url origin | sed 's|github.com/||' | sed 's|.git||')/rpm
+enabled=1
+gpgcheck=0
+REPO
+
+sudo dnf check-update || true
+sudo dnf install chromium
+EOF
+          
+          chmod +x $GITHUB_WORKSPACE/repos/*.sh
+
+  build-macos:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 600
+    
+    permissions:
+      contents: write
+    
+    env:
+      CHROMIUM_VERSION: ${{ needs.check-version.outputs.version }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Get GitHub token for authentication
+        run: |
+          git config --global credential.helper store
+          echo "https://$GITHUB_TOKEN@github.com" > ~/.git-credentials
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Install Xcode
+        run: |
+          sudo xcode-select --switch /Applications/Xcode.app
+      
+      - name: Install depot_tools
+        run: |
+          cd /opt
+          sudo git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo 'export PATH="/opt/depot_tools:$PATH"' >> ~/.bashrc
+          echo 'export PATH="/opt/depot_tools:$PATH"' >> $GITHUB_ENV
+      
+      - name: Create workspace directory
+        run: |
+          mkdir -p $HOME/chromium
+      
+      - name: Fetch Chromium source
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd $HOME/chromium
+          
+          git config --global credential.helper store
+          git config --global init.defaultBranch main
+          
+          fetch --nohooks --no-history chromium --target_os=mac --target_arch=x64
+      
+      - name: Clone Trivalent patches for macOS
+        run: |
+          cd $HOME/chromium
+          git clone https://github.com/secureblue/Trivalent.git trivalent-patches
+      
+      - name: Apply Trivalent patches for macOS
+        run: |
+          cd $HOME/chromium/src
+          
+          # Apply Vanadium patches first (only those that apply to macOS)
+          for patch in $HOME/chromium/trivalent-patches/vanadium_patches/*.patch; do
+            echo "Applying $(basename $patch)..."
+            git apply "$patch" --ignore-whitespace 2>/dev/null || true
+          done
+          
+          # Apply Trivalent patches (only those that apply to macOS)
+          for patch in $HOME/chromium/trivalent-patches/patches/*.patch; do
+            echo "Applying $(basename $patch)..."
+            git apply "$patch" --ignore-whitespace 2>/dev/null || true
+          done
+      
+      - name: Setup build environment
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd $HOME/chromium/src
+          
+          gclient runhooks
+          
+          gn gen out/Release \
+            --args='
+              is_official_build = true
+              is_component_build = false
+              enable_nacl = false
+              treat_warnings_as_errors = false
+              chrome_pgo_phase = 0
+              use_thin_lto = false
+              mac_deployment_target = "10.15"
+            '
+      
+      - name: Build Chromium
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd $HOME/chromium/src
+          
+          ninja -C out/Release chrome -j $(sysctl -n hw.ncpu)
+      
+      - name: Create DMG package
+        run: |
+          cd $HOME/chromium/src
+          
+          # Create app bundle structure
+          mkdir -p "Chromium.app/Contents/MacOS"
+          mkdir -p "Chromium.app/Contents/Resources"
+          
+          # Copy Chrome binary
+          cp out/Release/chrome "Chromium.app/Contents/MacOS/Chromium"
+          
+          # Copy resources
+          cp -r out/Release/locales "Chromium.app/Contents/Resources/"
+          cp -r out/Release/resources "Chromium.app/Contents/Resources/" 2>/dev/null || true
+          
+          # Copy app icon
+          cp out/Release/Chromium.app/Contents/Resources/app.icns "Chromium.app/Contents/Resources/" 2>/dev/null || true
+          
+          # Create Info.plist
+          cat > "Chromium.app/Contents/Info.plist" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>Chromium</string>
+    <key>CFBundleIconFile</key>
+    <string>app.icns</string>
+    <key>CFBundleIdentifier</key>
+    <string>org.chromium.Chromium</string>
+    <key>CFBundleName</key>
+    <string>Chromium</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${{ env.CHROMIUM_VERSION }}</string>
+    <key>CFBundleVersion</key>
+    <string>${{ env.CHROMIUM_VERSION }}</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>10.15</string>
+    <key>NSMainNibFile</key>
+    <string></string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+</dict>
+</plist>
+EOF
+          
+          # Make executable
+          chmod +x "Chromium.app/Contents/MacOS/Chromium"
+          
+          # Create DMG using hdiutil
+          hdiutil create -volname "Chromium-${{ env.CHROMIUM_VERSION }}" -srcfolder "Chromium.app" -ov -format UDZO "$HOME/chromium-${{ env.CHROMIUM_VERSION }}-x64.dmg"
+      
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            $HOME/chromium-${{ env.CHROMIUM_VERSION }}-x64.dmg
+          body: |
+            Chromium built from source (macOS) - ${{ env.CHROMIUM_VERSION }}
+            
+            Build Type: ${{ github.event.inputs.build_type || 'Release' }}
+            Commit: ${{ github.sha }}
+            Built on: ${{ runner.os }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromium-dmg
+          path: $HOME/chromium-${{ env.CHROMIUM_VERSION }}-x64.dmg
+          retention-days: 5
