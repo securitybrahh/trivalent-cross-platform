@@ -4,7 +4,7 @@ on:
   push:
     tags:
       - 'chromium-*'
-  schedulae:
+  schedule:
     - cron: '0 0 * * *'  # Run daily at midnight UTC
   workflow_dispatch:
     inputs:
@@ -36,21 +36,21 @@ jobs:
         run: |
           # Fetch latest Chromium version from version server
           VERSION=$(curl -sS https://versionhistory.googleapis.com/v1/chrome/all/versions | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-versions = data.get('versions', [])
-if versions:
-    # Get the latest stable version
-    for v in versions:
-        if v.get('channel') == 'stable':
-            print(v.get('version', ''))
-            break
-          ")
-          
-          if [ -z "$VERSION" ]; then
-            echo "Failed to fetch version, using default"
-            exit 1
-          fi
+          import sys, json
+          data = json.load(sys.stdin)
+          versions = data.get('versions', [])
+          if versions:
+              # Get the latest stable version
+              for v in versions:
+                  if v.get('channel') == 'stable':
+                      print(v.get('version', ''))
+                      break
+                    ")
+                    
+                    if [ -z "$VERSION" ]; then
+                      echo "Failed to fetch version, using default"
+                      exit 1
+                    fi
           
           echo "Latest Chromium version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
@@ -230,21 +230,8 @@ if versions:
           $updateUrl | Out-File -FilePath "$destDir\updateurl.txt" -Encoding utf8
           
           # Create chrlauncher.ini template
-          @"
-[chrlauncher]
-
-# Custom Chromium update URL
-ChromiumUpdateUrl=${{ github.server_url }}/${{ github.repository }}/releases/latest/download/updateurl.txt
-
-# Command line for Chromium
-ChromiumCommandLine=--user-data-dir="%LOCALAPPDATA%\Trivalent\User Data" --no-default-browser-check
-
-# Chromium executable file name
-ChromiumBinary=chrome.exe
-
-# Chromium binaries directory
-ChromiumDirectory=.
-"@ | Out-File -FilePath "$destDir\chrlauncher.ini" -Encoding utf8
+          $iniContent = "[chrlauncher]`n`n# Custom Chromium update URL`nChromiumUpdateUrl=${{ github.server_url }}/${{ github.repository }}/releases/latest/download/updateurl.txt`n`n# Command line for Chromium`nChromiumCommandLine=--user-data-dir=\"%LOCALAPPDATA%\Trivalent\User Data\" --no-default-browser-check`n`n# Chromium executable file name`nChromiumBinary=chrome.exe`n`n# Chromium binaries directory`nChromiumDirectory=."
+          $iniContent | Out-File -FilePath "$destDir\chrlauncher.ini" -Encoding utf8
           
           # Create zip archive
           Compress-Archive -Path $destDir\* -DestinationPath "$env:TEMP\chromium-windows.zip" -Force
@@ -427,20 +414,20 @@ ChromiumDirectory=.
           cp -r /root/chromium-build/* /root/chromium-deb/opt/chromium/
           
           cat > /root/chromium-deb/DEBIAN/control << 'EOF'
-Package: chromium
-Version: ${{ env.CHROMIUM_VERSION }}
-Section: web browsers
-Priority: optional
-Architecture: amd64
-Depends: libnss3, libatk1.0-0, libatk-bridge2.0-0, libcups2, libdrm2, libxkbcommon0, libxcomposite1, libxdamage1, libxfixes3, libxrandr2, libgbm1, libpango-1.0-0, libcairo2, libasound2
-Maintainer: Chromium Team <chromium@example.com>
-Description: Chromium web browser
-EOF
+          Package: chromium
+          Version: ${{ env.CHROMIUM_VERSION }}
+          Section: web browsers
+          Priority: optional
+          Architecture: amd64
+          Depends: libnss3, libatk1.0-0, libatk-bridge2.0-0, libcups2, libdrm2, libxkbcommon0, libxcomposite1, libxdamage1, libxfixes3, libxrandr2, libgbm1, libpango-1.0-0, libcairo2, libasound2
+          Maintainer: Chromium Team <chromium@example.com>
+          Description: Chromium web browser
+          EOF
           
           cat > /root/chromium-deb/DEBIAN/postinst << 'EOF'
-#!/bin/sh
-chmod 4755 /opt/chromium/chrome
-EOF
+          #!/bin/sh
+          chmod 4755 /opt/chromium/chrome
+          EOF
           
           chmod 755 /root/chromium-deb/DEBIAN/postinst
           
@@ -621,22 +608,22 @@ EOF
           
           # Create SPEC file
           cat > /root/chromium.spec << 'EOF'
-Name: chromium
-Version: ${{ env.CHROMIUM_VERSION }}
-Release: 1%{?dist}
-Summary: Chromium web browser
-License: BSD
-URL: https://www.chromium.org
-
-%description
-Chromium web browser
-
-%files
-/opt/chromium/
-
-%post
-chmod 4755 /opt/chromium/chrome
-EOF
+          Name: chromium
+          Version: ${{ env.CHROMIUM_VERSION }}
+          Release: 1%{?dist}
+          Summary: Chromium web browser
+          License: BSD
+          URL: https://www.chromium.org
+          
+          %description
+          Chromium web browser
+          
+          %files
+          /opt/chromium/
+          
+          %post
+          chmod 4755 /opt/chromium/chrome
+          EOF
           
           # Build RPM
           rpmbuild -bb /root/chromium.spec \
@@ -717,15 +704,15 @@ EOF
           
           # Create Release file
           cat > Release << EOF
-Origin: Trivalent
-Label: Trivalent
-Suite: stable
-Version: ${{ env.CHROMIUM_VERSION }}
-Codename: stable
-Architectures: amd64
-Components: main
-Description: Trivalent - Security-focused Chromium fork
-EOF
+          Origin: Trivalent
+          Label: Trivalent
+          Suite: stable
+          Version: ${{ env.CHROMIUM_VERSION }}
+          Codename: stable
+          Architectures: amd64
+          Components: main
+          Description: Trivalent - Security-focused Chromium fork
+          EOF
           
           # Sign the Release file (optional, can skip for unsigned)
           chmod 644 Release Packages.gz
@@ -755,34 +742,34 @@ EOF
         run: |
           # Create DEB source config
           cat > $GITHUB_WORKSPACE/repos/deb-install.sh << 'EOF'
-#!/bin/bash
-# Trivalent DEB Repository Setup
-# Add this repository to your system:
-
-# For Debian/Ubuntu:
-echo "deb [trusted=yes] https://$(git remote get-url origin | sed 's|github.com/||' | sed 's|.git||')/deb/ ./" | sudo tee /etc/apt/sources.list.d/trivalent.list
-sudo apt-get update
-sudo apt-get install chromium
-EOF
+          #!/bin/bash
+          # Trivalent DEB Repository Setup
+          # Add this repository to your system:
           
-          # Create RPM source config
-          cat > $GITHUB_WORKSPACE/repos/rpm-install.sh << 'EOF'
-#!/bin/bash
-# Trivalent RPM Repository Setup
-# Add this repository to your system:
-
-# For Fedora/RHEL:
-sudo tee /etc/yum.repos.d/trivalent.repo << REPO
-[trivalent]
-name=Trivalent
-baseurl=https://$(git remote get-url origin | sed 's|github.com/||' | sed 's|.git||')/rpm
-enabled=1
-gpgcheck=0
-REPO
-
-sudo dnf check-update || true
-sudo dnf install chromium
-EOF
+          # For Debian/Ubuntu:
+          echo "deb [trusted=yes] https://$(git remote get-url origin | sed 's|github.com/||' | sed 's|.git||')/deb/ ./" | sudo tee /etc/apt/sources.list.d/trivalent.list
+          sudo apt-get update
+          sudo apt-get install chromium
+          EOF
+                    
+                    # Create RPM source config
+                    cat > $GITHUB_WORKSPACE/repos/rpm-install.sh << 'EOF'
+          #!/bin/bash
+          # Trivalent RPM Repository Setup
+          # Add this repository to your system:
+          
+          # For Fedora/RHEL:
+          sudo tee /etc/yum.repos.d/trivalent.repo << REPO
+          [trivalent]
+          name=Trivalent
+          baseurl=https://$(git remote get-url origin | sed 's|github.com/||' | sed 's|.git||')/rpm
+          enabled=1
+          gpgcheck=0
+          REPO
+          
+          sudo dnf check-update || true
+          sudo dnf install chromium
+          EOF
           
           chmod +x $GITHUB_WORKSPACE/repos/*.sh
 
@@ -900,35 +887,35 @@ EOF
           
           # Create Info.plist
           cat > "Chromium.app/Contents/Info.plist" << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>Chromium</string>
-    <key>CFBundleIconFile</key>
-    <string>app.icns</string>
-    <key>CFBundleIdentifier</key>
-    <string>org.chromium.Chromium</string>
-    <key>CFBundleName</key>
-    <string>Chromium</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>${{ env.CHROMIUM_VERSION }}</string>
-    <key>CFBundleVersion</key>
-    <string>${{ env.CHROMIUM_VERSION }}</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>10.15</string>
-    <key>NSMainNibFile</key>
-    <string></string>
-    <key>NSPrincipalClass</key>
-    <string>NSApplication</string>
-    <key>LSApplicationCategoryType</key>
-    <string>public.app-category.utilities</string>
-</dict>
-</plist>
-EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>Chromium</string>
+              <key>CFBundleIconFile</key>
+              <string>app.icns</string>
+              <key>CFBundleIdentifier</key>
+              <string>org.chromium.Chromium</string>
+              <key>CFBundleName</key>
+              <string>Chromium</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${{ env.CHROMIUM_VERSION }}</string>
+              <key>CFBundleVersion</key>
+              <string>${{ env.CHROMIUM_VERSION }}</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>10.15</string>
+              <key>NSMainNibFile</key>
+              <string></string>
+              <key>NSPrincipalClass</key>
+              <string>NSApplication</string>
+              <key>LSApplicationCategoryType</key>
+              <string>public.app-category.utilities</string>
+          </dict>
+          </plist>
+          EOF
           
           # Make executable
           chmod +x "Chromium.app/Contents/MacOS/Chromium"
