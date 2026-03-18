@@ -196,8 +196,8 @@ jobs:
           cd $env:USERPROFILE\chromium\src
           
           # Generate release build
-          cmd /c "gn gen out\Release --args=\"is_official_build = true enable_nacl = false treat_warnings_as_errors = false chrome_pgo_phase = 0\""
-      
+          cmd /c "gn gen out\Release --args=\"is_official_build = true enable_nacl = false treat_warnings_as_errors = false chrome_pgo_phase = 0 is_cfi = true use_cfi_cast = true enable_reporting = false enable_remoting = false is_clang = true use_sysroot = false enable_vr = false use_static_angle = true angle_shared_libvulkan = false enable_swiftshader = false build_dawn_tests = false enable_perfetto_unittests = false disable_fieldtrial_testing_config = true angle_has_histograms = false safe_browsing_use_unrar = false use_kerberos = true v8_enable_drumbrake = true\""
+            
       - name: Build Chromium
         run: |
           $env:Path = "$env:Path;C:\depot_tools"
@@ -581,7 +581,30 @@ jobs:
               treat_warnings_as_errors = false
               chrome_pgo_phase = 0
               use_thin_lto = false
-            '
+              is_cfi = true
+              use_cfi_cast = true
+              enable_reporting = false
+              enable_remoting = false
+              is_clang = true
+              use_sysroot = false
+              target_os = "linux"
+              current_os = "linux"
+              enable_vr = false
+              use_static_angle = true
+              angle_shared_libvulkan = false
+              enable_swiftshader = false
+              build_dawn_tests = false
+              enable_perfetto_unittests = false
+              disable_fieldtrial_testing_config = true
+              angle_has_histograms = false
+              safe_browsing_use_unrar = false
+              use_kerberos = true
+              use_qt6 = true
+              moc_qt6_path = "/usr/lib/x86_64-linux-gnu/qt6/libexec/"
+              use_pulseaudio = true
+              rtc_use_pipewire = true
+              rtc_link_pipewire = true
+              v8_enable_drumbrake = true
       
       - name: Build Chromium
         run: |
@@ -860,7 +883,20 @@ jobs:
               chrome_pgo_phase = 0
               use_thin_lto = false
               mac_deployment_target = "10.15"
-            '
+              is_cfi = true
+              use_cfi_cast = true
+              enable_reporting = false
+              enable_remoting = false
+              enable_vr = false
+              use_static_angle = true
+              angle_shared_libvulkan = false
+              enable_swiftshader = false
+              build_dawn_tests = false
+              enable_perfetto_unittests = false
+              disable_fieldtrial_testing_config = true
+              angle_has_histograms = false
+              safe_browsing_use_unrar = false
+              v8_enable_drumbrake = true
       
       - name: Build Chromium
         run: |
