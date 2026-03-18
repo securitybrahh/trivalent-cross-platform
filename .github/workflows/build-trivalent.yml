@@ -2,6 +2,8 @@ name: Build Chromium from Source
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'chromium-*'
   schedule:
