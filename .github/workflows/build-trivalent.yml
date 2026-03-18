@@ -272,7 +272,189 @@ jobs:
           name: chromium-windows
           path: ${{ env.TEMP }}\chromium-windows.zip
           retention-days: 5
+
   
+  build-windows-arm64:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 600
+    
+    permissions:
+      contents: write
+    
+    env:
+      CHROMIUM_VERSION: ${{ needs.check-version.outputs.version }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Get GitHub token for authentication
+        run: |
+          git config --global credential.helper store
+          "https://$env:GITHUB_TOKEN@github.com" | Out-File -FilePath ~/.git-credentials -Encoding utf8
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Install Visual Studio Build Tools with ARM64 support
+        run: |
+          # Download Visual Studio Build Tools installer
+          $vsBuildToolsUrl = "https://aka.ms/vs/17/release/vs_buildtools.exe"
+          $installerPath = "$env:TEMP\vs_buildtools_arm64.exe"
+          
+          Write-Host "Downloading Visual Studio Build Tools..."
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Invoke-WebRequest -Uri $vsBuildToolsUrl -OutFile $installerPath -UseBasicParsing
+          
+          Write-Host "Installing Visual Studio Build Tools with ARM64 components..."
+          $process = Start-Process -FilePath $installerPath -ArgumentList "--quiet", "--wait", "--norestart", "--nocache", "--add Microsoft.VisualStudio.Workload.VCTools", "--add Microsoft.VisualStudio.Component.VC.Tools.ARM64", "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "--add Microsoft.VisualStudio.Component.Windows11SDK.22621", "--add Microsoft.VisualStudio.Component.VC.Tools.ATL" -PassThru -Wait
+          
+          if ($process.ExitCode -eq 0) {
+            Write-Host "Visual Studio Build Tools installed successfully"
+          } else {
+            Write-Host "Visual Studio Build Tools installation completed with exit code: $($process.ExitCode)"
+          }
+      
+      - name: Install depot_tools
+        run: |
+          $depotToolsPath = "C:\depot_tools"
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git $depotToolsPath
+          Add-Content $env:Path ";$depotToolsPath"
+          [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$depotToolsPath", [EnvironmentVariableTarget]::User)
+      
+      - name: Initialize depot_tools for Windows ARM64
+        run: |
+          $env:Path = "$env:Path;C:\depot_tools"
+          cd C:\depot_tools
+          cmd /c "gclient --version"
+      
+      - name: Set environment variables for ARM64
+        run: |
+          $depotToolsPath = "C:\depot_tools"
+          Add-Content $env:GITHUB_ENV "PATH=$env:Path;$depotToolsPath"
+          Add-Content $env:GITHUB_ENV "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
+          Add-Content $env:GITHUB_ENV "GYP_MSVS_VERSION=2022"
+          Add-Content $env:GITHUB_ENV "TARGET_ARCH=arm64"
+      
+      - name: Fetch Chromium source for ARM64
+        run: |
+          $env:Path = "$env:Path;C:\depot_tools"
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+          $env:GYP_MSVS_VERSION = "2022"
+          $env:TARGET_ARCH = "arm64"
+          
+          cd $env:USERPROFILE
+          if (-not (Test-Path "chromium")) {
+            mkdir chromium
+          }
+          cd chromium
+          
+          # Initialize depot_tools
+          cmd /c "fetch --nohooks --no-history chromium"
+      
+      - name: Clone Trivalent patches for Windows ARM64
+        run: |
+          cd $env:USERPROFILE\chromium
+          git clone https://github.com/secureblue/Trivalent.git trivalent-patches
+      
+      - name: Apply Trivalent patches for Windows ARM64
+        run: |
+          cd $env:USERPROFILE\chromium\src
+          
+          # Apply Vanadium patches
+          Get-ChildItem -Path "$env:USERPROFILE\chromium\trivalent-patches\vanadium_patches" -Filter "*.patch" | ForEach-Object {
+            Write-Host "Applying $($_.Name)..."
+            git apply "$($_.FullName)" --ignore-whitespace 2>$null
+          }
+          
+          # Apply Trivalent patches
+          Get-ChildItem -Path "$env:USERPROFILE\chromium\trivalent-patches\patches" -Filter "*.patch" | ForEach-Object {
+            Write-Host "Applying $($_.Name)..."
+            git apply "$($_.FullName)" --ignore-whitespace 2>$null
+          }
+      
+      - name: Run gclient hooks for ARM64
+        run: |
+          $env:Path = "$env:Path;C:\depot_tools"
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+          
+          cd $env:USERPROFILE\chromium\src
+          cmd /c "gclient runhooks"
+      
+      - name: Generate build files for ARM64
+        run: |
+          $env:Path = "$env:Path;C:\depot_tools"
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+          
+          cd $env:USERPROFILE\chromium\src
+          
+          # Generate release build for ARM64
+          cmd /c "gn gen out\Release --args=\"is_official_build = true enable_nacl = false treat_warnings_as_errors = false chrome_pgo_phase = 0 is_cfi = true use_cfi_cast = true enable_reporting = false enable_remoting = false is_clang = true use_sysroot = false enable_vr = false use_static_angle = true angle_shared_libvulkan = false enable_swiftshader = false build_dawn_tests = false enable_perfetto_unittests = false disable_fieldtrial_testing_config = true angle_has_histograms = false safe_browsing_use_unrar = false use_kerberos = true v8_enable_drumbrake = true target_cpu = \\\"arm64\\\"\""
+      
+      - name: Build Chromium for ARM64
+        run: |
+          $env:Path = "$env:Path;C:\depot_tools"
+          $env:DEPOT_TOOLS_WIN_TOOLCHAIN = "0"
+          
+          cd $env:USERPROFILE\chromium\src
+          
+          # Build using ninja
+          cmd /c "ninja -C out\Release chrome -j 8"
+      
+      - name: Package build artifacts for ARM64
+        run: |
+          $srcDir = "$env:USERPROFILE\chromium\src\out\Release"
+          $destDir = "$env:TEMP\chromium-build-arm64"
+          
+          New-Item -ItemType Directory -Force -Path $destDir
+          
+          # Copy Chrome executable and required files
+          Copy-Item "$srcDir\chrome.exe" $destDir -Force
+          Copy-Item "$srcDir\chrome.dll" $destDir -Force -ErrorAction SilentlyContinue
+          Copy-Item "$srcDir\*.dll" $destDir -Force -ErrorAction SilentlyContinue
+          
+          # Copy resources folder
+          Copy-Item "$srcDir\resources" $destDir -Recurse -Force -ErrorAction SilentlyContinue
+          
+          # Copy locales folder
+          Copy-Item "$srcDir\locales" $destDir -Recurse -Force -ErrorAction SilentlyContinue
+          
+          # Create updateurl.txt for chrlauncher (ARM64 version)
+          $timestamp = [int64](Get-Date -UFormat "%s")
+          $updateUrl = "browser=chromium;os=windows;architecture=arm64;timestamp=$timestamp;editor=${{ github.repository_owner }};channel=stable;repository=${{ github.server_url }}/${{ github.repository }}/releases;download=${{ github.server_url }}/${{ github.repository }}/releases/latest/download/chromium-windows-arm64.zip;version=${{ env.CHROMIUM_VERSION }};revision=1;commit=${{ github.sha }}"
+          $updateUrl | Out-File -FilePath "$destDir\updateurl.txt" -Encoding utf8
+          
+          # Create chrlauncher.ini template
+          $iniContent = "[chrlauncher]`n`n# Custom Chromium update URL`nChromiumUpdateUrl=${{ github.server_url }}/${{ github.repository }}/releases/latest/download/updateurl.txt`n`n# Command line for Chromium`nChromiumCommandLine=--user-data-dir=\"%LOCALAPPDATA%\Trivalent\User Data\" --no-default-browser-check`n`n# Chromium executable file name`nChromiumBinary=chrome.exe`n`n# Chromium binaries directory`nChromiumDirectory=."
+          $iniContent | Out-File -FilePath "$destDir\chrlauncher.ini" -Encoding utf8
+          
+          # Create zip archive
+          Compress-Archive -Path $destDir\* -DestinationPath "$env:TEMP\chromium-windows-arm64.zip" -Force
+      
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            ${{ env.TEMP }}\chromium-windows-arm64.zip
+          body: |
+            Chromium built from source (Windows ARM64) - ${{ env.CHROMIUM_VERSION }}
+            
+            Build Type: ${{ github.event.inputs.build_type || 'Release' }}
+            Commit: ${{ github.sha }}
+            Built on: ${{ runner.os }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromium-windows-arm64
+          path: ${{ env.TEMP }}\chromium-windows-arm64.zip
+          retention-days: 5
+  
+
   build-linux-deb:
     needs: check-version
     if: needs.check-version.outputs.should_build == 'true'
