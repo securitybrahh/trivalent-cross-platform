@@ -118,10 +118,18 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Install Visual Studio Build Tools
-        uses: egor-tensin/setup-vs-build-tools@v2
-        with:
-          vs-version: '2022'
-          components: 'Microsoft.VisualStudio.Workload.VCTools,Microsoft.VisualStudio.Component.VC.Tools.x86.x64,Microsoft.VisualStudio.Component.Windows11SDK.22621'
+        run: |
+          # Download Visual Studio Build Tools installer
+          $vsBuildToolsUrl = "https://aka.ms/vs/17/release/vs_buildtools.exe"
+          $installerPath = "$env:TEMP\vs_buildtools.exe"
+          
+          Write-Host "Downloading Visual Studio Build Tools..."
+          Invoke-WebRequest -Uri $vsBuildToolsUrl -OutFile $installerPath
+          
+          Write-Host "Installing Visual Studio Build Tools..."
+          Start-Process -FilePath $installerPath -ArgumentList "--quiet", "--wait", "--norestart", "--nocache", "--add Microsoft.VisualStudio.Workload.VCTools", "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "--add Microsoft.VisualStudio.Component.Windows11SDK.22621", "--add Microsoft.VisualStudio.Component.VC.Tools.ATL" -Wait -NoNewWindow
+          
+          Write-Host "Visual Studio Build Tools installed successfully"
       
       - name: Install depot_tools
         run: |
@@ -296,13 +304,13 @@ jobs:
             libatk1.0-dev \
             libatk-bridge2.0-dev \
             libcups2-dev \
-            libdrm2-dev \
+            libdrm-dev \
             libxkbcommon-dev \
             libxcomposite-dev \
             libxdamage-dev \
             libxfixes-dev \
             libxrandr-dev \
-            libgbm1-dev \
+            libgbm1 \
             libpango1.0-dev \
             libcairo2-dev \
             libasound2-dev \
@@ -325,6 +333,16 @@ jobs:
           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
           echo 'export PATH="/opt/depot_tools:$PATH"' >> ~/.bashrc
           echo 'export PATH="/opt/depot_tools:$PATH"' >> $GITHUB_ENV
+            
+      - name: Initialize depot_tools
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          # Initialize CIPD to download vpython3 and other tools
+          cd /opt/depot_tools
+          # Run gclient to trigger CIPD initialization
+          timeout 60 gclient --version || true
+          # Verify vpython3 is available
+          ls -la /opt/depot_tools/.cipd_bin/ || true
       
       - name: Create workspace directory
         run: |
@@ -493,13 +511,13 @@ jobs:
             libatk1.0-dev \
             libatk-bridge2.0-dev \
             libcups2-dev \
-            libdrm2-dev \
+            libdrm-dev \
             libxkbcommon-dev \
             libxcomposite-dev \
             libxdamage-dev \
             libxfixes-dev \
             libxrandr-dev \
-            libgbm1-dev \
+            libgbm1 \
             libpango1.0-dev \
             libcairo2-dev \
             libasound2-dev \
@@ -522,6 +540,12 @@ jobs:
           echo 'export PATH="/opt/depot_tools:$PATH"' >> ~/.bashrc
           echo 'export PATH="/opt/depot_tools:$PATH"' >> $GITHUB_ENV
       
+      - name: Initialize depot_tools for RPM
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd /opt/depot_tools
+          timeout 60 gclient --version || true
+            
       - name: Create workspace directory
         run: |
           mkdir -p /root/chromium
