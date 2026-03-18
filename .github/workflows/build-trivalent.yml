@@ -124,12 +124,17 @@ jobs:
           $installerPath = "$env:TEMP\vs_buildtools.exe"
           
           Write-Host "Downloading Visual Studio Build Tools..."
-          Invoke-WebRequest -Uri $vsBuildToolsUrl -OutFile $installerPath
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Invoke-WebRequest -Uri $vsBuildToolsUrl -OutFile $installerPath -UseBasicParsing
           
           Write-Host "Installing Visual Studio Build Tools..."
-          Start-Process -FilePath $installerPath -ArgumentList "--quiet", "--wait", "--norestart", "--nocache", "--add Microsoft.VisualStudio.Workload.VCTools", "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "--add Microsoft.VisualStudio.Component.Windows11SDK.22621", "--add Microsoft.VisualStudio.Component.VC.Tools.ATL" -Wait -NoNewWindow
+          $process = Start-Process -FilePath $installerPath -ArgumentList "--quiet", "--wait", "--norestart", "--nocache", "--add Microsoft.VisualStudio.Workload.VCTools", "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "--add Microsoft.VisualStudio.Component.Windows11SDK.22621", "--add Microsoft.VisualStudio.Component.VC.Tools.ATL" -PassThru -Wait
           
-          Write-Host "Visual Studio Build Tools installed successfully"
+          if ($process.ExitCode -eq 0) {
+            Write-Host "Visual Studio Build Tools installed successfully"
+          } else {
+            Write-Host "Visual Studio Build Tools installation completed with exit code: $($process.ExitCode)"
+          }
       
       - name: Install depot_tools
         run: |
@@ -137,6 +142,13 @@ jobs:
           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git $depotToolsPath
           Add-Content $env:Path ";$depotToolsPath"
           [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$depotToolsPath", [EnvironmentVariableTarget]::User)
+          
+      - name: Initialize depot_tools for Windows
+        run: |
+          $env:Path = "$env:Path;C:\depot_tools"
+          cd C:\depot_tools
+          cmd /c "gclient --version"
+      
       
       - name: Set environment variables
         run: |
