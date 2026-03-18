@@ -37,22 +37,13 @@ jobs:
         id: get_version
         run: |
           # Fetch latest Chromium version from version server
-          VERSION=$(curl -sS https://versionhistory.googleapis.com/v1/chrome/all/versions | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          versions = data.get('versions', [])
-          if versions:
-              # Get the latest stable version
-              for v in versions:
-                  if v.get('channel') == 'stable':
-                      print(v.get('version', ''))
-                      break
-                    ")
-                    
-                    if [ -z "$VERSION" ]; then
-                      echo "Failed to fetch version, using default"
-                      exit 1
-                    fi
+          # Fetch latest Chromium version from Gitiles refs page
+          VERSION=$(curl -sS "https://chromium.googlesource.com/chromium/src/+refs" | grep -oP 'tags/\K[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          
+          if [ -z "$VERSION" ]; then
+            echo "Failed to fetch version, using default"
+            exit 1
+          fi
           
           echo "Latest Chromium version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
