@@ -849,6 +849,12 @@ jobs:
           echo 'export PATH="/opt/depot_tools:$PATH"' >> ~/.bashrc
           echo 'export PATH="/opt/depot_tools:$PATH"' >> $GITHUB_ENV
       
+      - name: Initialize depot_tools for macOS
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd /opt/depot_tools
+          timeout 60 gclient --version || true
+            
       - name: Create workspace directory
         run: |
           mkdir -p $HOME/chromium
