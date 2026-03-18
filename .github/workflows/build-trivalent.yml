@@ -1199,3 +1199,196 @@ jobs:
           name: chromium-dmg
           path: $HOME/chromium-${{ env.CHROMIUM_VERSION }}-x64.dmg
           retention-days: 5
+
+  
+  build-macos-arm64:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    runs-on: macos-14
+    timeout-minutes: 600
+    
+    permissions:
+      contents: write
+    
+    env:
+      CHROMIUM_VERSION: ${{ needs.check-version.outputs.version }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Get GitHub token for authentication
+        run: |
+          git config --global credential.helper store
+          echo "https://$GITHUB_TOKEN@github.com" > ~/.git-credentials
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Install Xcode
+        run: |
+          sudo xcode-select --switch /Applications/Xcode.app
+      
+      - name: Install depot_tools
+        run: |
+          cd /opt
+          sudo git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo 'export PATH="/opt/depot_tools:$PATH"' >> ~/.bashrc
+          echo 'export PATH="/opt/depot_tools:$PATH"' >> $GITHUB_ENV
+      
+      - name: Initialize depot_tools for macOS ARM64
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd /opt/depot_tools
+          timeout 60 gclient --version || true
+            
+      - name: Create workspace directory
+        run: |
+          mkdir -p $HOME/chromium
+      
+      - name: Fetch Chromium source for ARM64
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd $HOME/chromium
+          
+          git config --global credential.helper store
+          git config --global init.defaultBranch main
+          
+          fetch --nohooks --no-history chromium --target_os=mac --target_arch=arm64
+      
+      - name: Clone Trivalent patches for macOS ARM64
+        run: |
+          cd $HOME/chromium
+          git clone https://github.com/secureblue/Trivalent.git trivalent-patches
+      
+      - name: Apply Trivalent patches for macOS ARM64
+        run: |
+          cd $HOME/chromium/src
+          
+          # Apply Vanadium patches first (only those that apply to macOS)
+          for patch in $HOME/chromium/trivalent-patches/vanadium_patches/*.patch; do
+            echo "Applying $(basename $patch)..."
+            git apply "$patch" --ignore-whitespace 2>/dev/null || true
+          done
+          
+          # Apply Trivalent patches (only those that apply to macOS)
+          for patch in $HOME/chromium/trivalent-patches/patches/*.patch; do
+            echo "Applying $(basename $patch)..."
+            git apply "$patch" --ignore-whitespace 2>/dev/null || true
+          done
+      
+      - name: Setup build environment for ARM64
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd $HOME/chromium/src
+          
+          gclient runhooks
+          
+          gn gen out/Release \
+            --args='
+              is_official_build = true
+              is_component_build = false
+              enable_nacl = false
+              treat_warnings_as_errors = false
+              chrome_pgo_phase = 0
+              use_thin_lto = false
+              mac_deployment_target = "11.0"
+              target_cpu = "arm64"
+              is_cfi = true
+              use_cfi_cast = true
+              enable_reporting = false
+              enable_remoting = false
+              enable_vr = false
+              use_static_angle = true
+              angle_shared_libvulkan = false
+              enable_swiftshader = false
+              build_dawn_tests = false
+              enable_perfetto_unittests = false
+              disable_fieldtrial_testing_config = true
+              angle_has_histograms = false
+              safe_browsing_use_unrar = false
+              v8_enable_drumbrake = true
+      
+      - name: Build Chromium for ARM64
+        run: |
+          export PATH="/opt/depot_tools:$PATH"
+          cd $HOME/chromium/src
+          
+          ninja -C out/Release chrome -j $(sysctl -n hw.ncpu)
+      
+      - name: Create DMG package for ARM64
+        run: |
+          cd $HOME/chromium/src
+          
+          # Create app bundle structure
+          mkdir -p "Chromium.app/Contents/MacOS"
+          mkdir -p "Chromium.app/Contents/Resources"
+          
+          # Copy Chrome binary
+          cp out/Release/chrome "Chromium.app/Contents/MacOS/Chromium"
+          
+          # Copy resources
+          cp -r out/Release/locales "Chromium.app/Contents/Resources/"
+          cp -r out/Release/resources "Chromium.app/Contents/Resources/" 2>/dev/null || true
+          
+          # Copy app icon
+          cp out/Release/Chromium.app/Contents/Resources/app.icns "Chromium.app/Contents/Resources/" 2>/dev/null || true
+          
+          # Create Info.plist
+          cat > "Chromium.app/Contents/Info.plist" << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleExecutable</key>
+              <string>Chromium</string>
+              <key>CFBundleIconFile</key>
+              <string>app.icns</string>
+              <key>CFBundleIdentifier</key>
+              <string>org.chromium.Chromium</string>
+              <key>CFBundleName</key>
+              <string>Chromium</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${{ env.CHROMIUM_VERSION }}</string>
+              <key>CFBundleVersion</key>
+              <string>${{ env.CHROMIUM_VERSION }}</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>11.0</string>
+              <key>NSMainNibFile</key>
+              <string></string>
+              <key>NSPrincipalClass</key>
+              <string>NSApplication</string>
+              <key>LSApplicationCategoryType</key>
+              <string>public.app-category.utilities</string>
+          </dict>
+          </plist>
+          EOF
+          
+          # Make executable
+          chmod +x "Chromium.app/Contents/MacOS/Chromium"
+          
+          # Create DMG using hdiutil
+          hdiutil create -volname "Chromium-${{ env.CHROMIUM_VERSION }}-arm64" -srcfolder "Chromium.app" -ov -format UDZO "$HOME/chromium-${{ env.CHROMIUM_VERSION }}-arm64.dmg"
+      
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            $HOME/chromium-${{ env.CHROMIUM_VERSION }}-arm64.dmg
+          body: |
+            Chromium built from source (macOS ARM64) - ${{ env.CHROMIUM_VERSION }}
+            
+            Build Type: ${{ github.event.inputs.build_type || 'Release' }}
+            Commit: ${{ github.sha }}
+            Built on: {{ runner.os }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromium-dmg-arm64
+          path: $HOME/chromium-${{ env.CHROMIUM_VERSION }}-arm64.dmg
+          retention-days: 5
