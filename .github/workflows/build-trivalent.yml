@@ -1038,15 +1038,15 @@ jobs:
       
       - name: Install depot_tools
         run: |
-          cd /opt
-          sudo git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-          echo 'export PATH="/opt/depot_tools:$PATH"' >> ~/.bashrc
-          echo 'export PATH="/opt/depot_tools:$PATH"' >> $GITHUB_ENV
+          cd $HOME
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo 'export PATH="$HOME/depot_tools:$PATH"' >> ~/.bashrc
+          echo 'export PATH="$HOME/depot_tools:$PATH"' >> $GITHUB_ENV
       
       - name: Initialize depot_tools for macOS
         run: |
-          export PATH="/opt/depot_tools:$PATH"
-          cd /opt/depot_tools
+          export PATH="$HOME/depot_tools:$PATH"
+          cd $HOME/depot_tools
           timeout 60 gclient --version || true
             
       - name: Create workspace directory
@@ -1055,7 +1055,7 @@ jobs:
       
       - name: Fetch Chromium source
         run: |
-          export PATH="/opt/depot_tools:$PATH"
+          export PATH="$HOME/depot_tools:$PATH"
           cd $HOME/chromium
           
           git config --global credential.helper store
@@ -1086,7 +1086,7 @@ jobs:
       
       - name: Setup build environment
         run: |
-          export PATH="/opt/depot_tools:$PATH"
+          export PATH="$HOME/depot_tools:$PATH"
           cd $HOME/chromium/src
           
           gclient runhooks
@@ -1117,7 +1117,7 @@ jobs:
       
       - name: Build Chromium
         run: |
-          export PATH="/opt/depot_tools:$PATH"
+          export PATH="$HOME/depot_tools:$PATH"
           cd $HOME/chromium/src
           
           ninja -C out/Release chrome -j $(sysctl -n hw.ncpu)
@@ -1230,15 +1230,15 @@ jobs:
       
       - name: Install depot_tools
         run: |
-          cd /opt
-          sudo git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
-          echo 'export PATH="/opt/depot_tools:$PATH"' >> ~/.bashrc
-          echo 'export PATH="/opt/depot_tools:$PATH"' >> $GITHUB_ENV
+          cd $HOME
+          git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo 'export PATH="$HOME/depot_tools:$PATH"' >> ~/.bashrc
+          echo 'export PATH="$HOME/depot_tools:$PATH"' >> $GITHUB_ENV
       
       - name: Initialize depot_tools for macOS ARM64
         run: |
-          export PATH="/opt/depot_tools:$PATH"
-          cd /opt/depot_tools
+          export PATH="$HOME/depot_tools:$PATH"
+          cd $HOME/depot_tools
           timeout 60 gclient --version || true
             
       - name: Create workspace directory
@@ -1247,7 +1247,7 @@ jobs:
       
       - name: Fetch Chromium source for ARM64
         run: |
-          export PATH="/opt/depot_tools:$PATH"
+          export PATH="$HOME/depot_tools:$PATH"
           cd $HOME/chromium
           
           git config --global credential.helper store
@@ -1278,7 +1278,7 @@ jobs:
       
       - name: Setup build environment for ARM64
         run: |
-          export PATH="/opt/depot_tools:$PATH"
+          export PATH="$HOME/depot_tools:$PATH"
           cd $HOME/chromium/src
           
           gclient runhooks
@@ -1310,7 +1310,7 @@ jobs:
       
       - name: Build Chromium for ARM64
         run: |
-          export PATH="/opt/depot_tools:$PATH"
+          export PATH="$HOME/depot_tools:$PATH"
           cd $HOME/chromium/src
           
           ninja -C out/Release chrome -j $(sysctl -n hw.ncpu)
