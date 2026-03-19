@@ -140,9 +140,9 @@ jobs:
         run: |
           $depotToolsPath = "C:\depot_tools"
           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git $depotToolsPath
-          Add-Content $env:Path ";$depotToolsPath"
-          [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$depotToolsPath", [EnvironmentVariableTarget]::User)
-          
+          $env:Path = "$env:Path;$depotToolsPath"
+          [Environment]::SetEnvironmentVariable("Path", $env:Path, [EnvironmentVariableTarget]::Process)
+         
       - name: Initialize depot_tools for Windows
         run: |
           $env:Path = "$env:Path;C:\depot_tools"
@@ -320,8 +320,8 @@ jobs:
         run: |
           $depotToolsPath = "C:\depot_tools"
           git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git $depotToolsPath
-          Add-Content $env:Path ";$depotToolsPath"
-          [Environment]::SetEnvironmentVariable("Path", $env:Path + ";$depotToolsPath", [EnvironmentVariableTarget]::User)
+          $env:Path = "$env:Path;$depotToolsPath"
+          [Environment]::SetEnvironmentVariable("Path", $env:Path, [EnvironmentVariableTarget]::Process)
       
       - name: Initialize depot_tools for Windows ARM64
         run: |
