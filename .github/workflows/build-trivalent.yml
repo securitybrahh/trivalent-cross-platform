@@ -589,7 +589,7 @@ jobs:
               use_lld = true
               treat_warnings_as_errors = false
               chrome_pgo_phase = 0
-              use_thin_lto = false
+              use_thin_lto = true
             '
       
       - name: Build Chromium for DEB
@@ -1098,7 +1098,7 @@ jobs:
               enable_nacl = false
               treat_warnings_as_errors = false
               chrome_pgo_phase = 0
-              use_thin_lto = false
+              use_thin_lto = true
               mac_deployment_target = "10.15"
               is_cfi = true
               use_cfi_cast = true
